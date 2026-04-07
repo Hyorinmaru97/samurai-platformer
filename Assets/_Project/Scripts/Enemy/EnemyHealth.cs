@@ -8,6 +8,11 @@ public class EnemyHealth : MonoBehaviour
     [Header("UI")]
     public EnemyHpBar hpBar;
 
+    [Header("Soul Reward")]
+    public int minReward = 10;
+    public int maxReward = 20;
+    public GameObject soulVFXPrefab;
+
     EnemyController controller;
     EnemyDeath death;
 
@@ -29,6 +34,15 @@ public class EnemyHealth : MonoBehaviour
         if (hp <= 0)
         {
             if (hpBar) hpBar.Hide();
+
+            // Души
+            if (SoulManager.Instance != null)
+                SoulManager.Instance.AddSouls(Random.Range(minReward, maxReward + 1));
+
+            // VFX
+            if (soulVFXPrefab != null)
+                Instantiate(soulVFXPrefab, transform.position, Quaternion.identity);
+
             if (death) death.PlayDeath();
             else Destroy(gameObject);
             return;
@@ -43,9 +57,8 @@ public class EnemyHealth : MonoBehaviour
     }
 
     public void ResetHealth()
-{
-    hp = maxHp;
-    if (hpBar) hpBar.SetPercent(1f);
-}
-
+    {
+        hp = maxHp;
+        if (hpBar) hpBar.SetPercent(1f);
+    }
 }

@@ -1,6 +1,5 @@
 using UnityEngine;
 
-// Повесь на каждый PlayerHitbox1/2/3
 public class PlayerAttackHitbox : MonoBehaviour
 {
     [Header("Damage")]
@@ -9,15 +8,16 @@ public class PlayerAttackHitbox : MonoBehaviour
     void OnTriggerEnter2D(Collider2D other)
     {
         // Попали в босса
-        BossHealth bossHealth = other.GetComponent<BossHealth>();
-        if (bossHealth != null)
+        BossAI bossAI = other.GetComponentInParent<BossAI>();
+        if (bossAI != null)
         {
-            bossHealth.TakeDamage(damage);
+            Vector2 knockback = (other.transform.position - transform.position).normalized;
+            bossAI.TakeDamage(damage, knockback);
             return;
         }
 
         // Попали в обычного врага
-        EnemyHealth enemyHealth = other.GetComponent<EnemyHealth>();
+        EnemyHealth enemyHealth = other.GetComponentInParent<EnemyHealth>();
         if (enemyHealth != null)
         {
             enemyHealth.TakeDamage(damage);

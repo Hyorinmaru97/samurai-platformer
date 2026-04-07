@@ -7,7 +7,7 @@ ScriptedImporter:
       type: UnityEngine:AnimationClip
       assembly: UnityEngine.AnimationModule
       name: to idle
-    second: {fileID: 7400000, guid: e9f8a1cab2a10cc448e95f20ecd59940, type: 2}
+    second: {fileID: 7400000, guid: 3f926e451e88aaf47a1cecdcf8f0e171, type: 2}
   serializedVersion: 2
   userData: 
   assetBundleName: 
@@ -107,7 +107,7 @@ ScriptedImporter:
     generateIndividualEvents: 1
     generateSpriteAtlas: 1
   importFileNodeState: 1
-  platformSettingsDirtyTick: 639102323908832827
+  platformSettingsDirtyTick: 639111700976752866
   textureAssetName: 
   singleSpriteImportData:
   - name: 
