@@ -50,7 +50,7 @@ public class BossAttackHitbox : MonoBehaviour
         if (hit.Contains(other)) return;
 
         PlayerHealth hp = other.GetComponentInParent<PlayerHealth>();
-        if (hp == null) return;
+        if (hp == null || hp.IsDead) return; // <- вот и весь фикс
 
         hit.Add(other);
         hp.TakeDamage(damage);

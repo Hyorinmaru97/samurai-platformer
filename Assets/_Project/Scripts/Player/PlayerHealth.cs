@@ -11,6 +11,8 @@ public class PlayerHealth : MonoBehaviour
     int currentHealth;
     bool isDead;
 
+    public bool IsDead => isDead;
+
     [Header("UI")]
     public Slider hpBar;
     public TextMeshProUGUI youDiedText;
@@ -30,7 +32,13 @@ public class PlayerHealth : MonoBehaviour
     public float flashDuration = 0.08f;
     public float hitstopDuration = 0.05f;
 
+    [Header("Death Overlay")]
+    [Range(0f, 1f)]
+    public float overlayTargetAlpha = 0.95f;
+    public float fadeDuration = 1.5f;
+
     PlayerDash2D dash;
+    PlayerAttack2D attack;
     Rigidbody2D rb;
     PlayerController2D controller;
     Coroutine hitstopRoutine;
@@ -39,6 +47,7 @@ public class PlayerHealth : MonoBehaviour
     {
         currentHealth = maxHealth;
         dash = GetComponent<PlayerDash2D>();
+        attack = GetComponent<PlayerAttack2D>();
         rb = GetComponent<Rigidbody2D>();
         controller = GetComponent<PlayerController2D>();
 
@@ -60,7 +69,7 @@ public class PlayerHealth : MonoBehaviour
         if (invincibleTimer > 0)
             invincibleTimer -= Time.deltaTime;
 
-        if (Input.GetKeyDown(KeyCode.R))
+        if (isDead && Input.GetKeyDown(KeyCode.R))
             Restart();
     }
 
@@ -117,14 +126,14 @@ public class PlayerHealth : MonoBehaviour
 
         yield return new WaitForSecondsRealtime(knockbackDuration);
 
-        if (controller) controller.enabled = true;
-        if (controller) controller.OnHitstunEnd();
+        if (!isDead && controller) controller.enabled = true;
+        if (!isDead && controller) controller.OnHitstunEnd();
     }
 
     IEnumerator ResetHitstunAfterDelay()
     {
         yield return new WaitForSecondsRealtime(knockbackDuration);
-        if (controller) controller.OnHitstunEnd();
+        if (!isDead && controller) controller.OnHitstunEnd();
     }
 
     void Die()
@@ -137,7 +146,10 @@ public class PlayerHealth : MonoBehaviour
     IEnumerator DieRoutine()
     {
         if (controller) controller.enabled = false;
+        if (dash) dash.enabled = false;
+        if (attack) attack.enabled = false;
         if (rb) rb.linearVelocity = Vector2.zero;
+        if (rb) rb.bodyType = RigidbodyType2D.Kinematic;
 
         if (deathOverlay)
         {
@@ -156,8 +168,6 @@ public class PlayerHealth : MonoBehaviour
         }
 
         float elapsed = 0f;
-        float fadeDuration = 1.5f;
-        float overlayTargetAlpha = 0.7f;
 
         while (elapsed < fadeDuration)
         {
@@ -187,6 +197,7 @@ public class PlayerHealth : MonoBehaviour
 
     void Restart()
     {
+        Time.timeScale = 1f;
         SceneManager.LoadScene(SceneManager.GetActiveScene().name);
     }
 

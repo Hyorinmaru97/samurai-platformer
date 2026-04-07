@@ -1,0 +1,2767 @@
+﻿===== E:\Unity\Projects\MineWorld\Assets\_Project\Scripts\AttackHitbox.cs =====
+using System.Collections.Generic;
+using UnityEngine;
+
+public class AttackHitbox : MonoBehaviour
+{
+    public int damage = 1;
+
+    // РєРѕРіРѕ СѓР¶Рµ СѓРґР°СЂРёР»Рё РІ С‚РµРєСѓС‰РµР№ Р°С‚Р°РєРµ
+    private readonly HashSet<EnemyHealth> hitThisSwing = new HashSet<EnemyHealth>();
+
+    void OnEnable()
+    {
+        hitThisSwing.Clear();
+    }
+
+    void OnTriggerEnter2D(Collider2D other)
+    {
+        TryHit(other);
+    }
+
+    void OnTriggerStay2D(Collider2D other)
+    {
+        // РІР°Р¶РЅРѕ: РµСЃР»Рё РјС‹ СѓР¶Рµ СЃС‚РѕРёРј РІРЅСѓС‚СЂРё РІСЂР°РіР° Рё РЅР°Р¶Р°Р»Рё Р°С‚Р°РєСѓ вЂ” С‚РѕР¶Рµ РЅР°РЅРµСЃС‘С‚ СѓСЂРѕРЅ
+        TryHit(other);
+    }
+
+    void TryHit(Collider2D other)
+    {
+        var enemy = other.GetComponentInParent<EnemyHealth>();
+        if (!enemy) return;
+
+        if (hitThisSwing.Contains(enemy)) return;
+
+        hitThisSwing.Add(enemy);
+        enemy.TakeDamage(damage);
+    }
+}
+===== E:\Unity\Projects\MineWorld\Assets\_Project\Scripts\CameraFollow2D.cs =====
+using UnityEngine;
+
+public class CameraFollow2D : MonoBehaviour
+{
+    public Transform target;
+    public Vector3 offset = new Vector3(0f, 0f, -10f);
+    public float smoothTime = 0.15f;
+
+    // РћРіСЂР°РЅРёС‡РµРЅРёСЏ РєР°РјРµСЂС‹ (РіСЂР°РЅРёС†С‹ СѓСЂРѕРІРЅСЏ)
+    public bool useBounds = false;
+    public Vector2 minBounds;
+    public Vector2 maxBounds;
+
+    Vector3 velocity;
+
+    void LateUpdate()
+    {
+        if (!target) return;
+
+        Vector3 desired = target.position + offset;
+        Vector3 smoothed = Vector3.SmoothDamp(transform.position, desired, ref velocity, smoothTime);
+
+        if (useBounds)
+        {
+            smoothed.x = Mathf.Clamp(smoothed.x, minBounds.x, maxBounds.x);
+            smoothed.y = Mathf.Clamp(smoothed.y, minBounds.y, maxBounds.y);
+        }
+
+        transform.position = smoothed;
+    }
+}
+===== E:\Unity\Projects\MineWorld\Assets\_Project\Scripts\FaceFlip2D.cs =====
+using UnityEngine;
+
+public class FaceFlip2D : MonoBehaviour
+{
+    [Header("Refs")]
+    public Transform face;
+
+    [Header("Tuning")]
+    public bool invert = false;          // РµСЃР»Рё СЃРјРѕС‚СЂРёС‚ РЅР°РѕР±РѕСЂРѕС‚ вЂ” РІРєР»СЋС‡Рё
+    public float deadZone = 0.01f;       // РёРіРЅРѕСЂ РјРµР»РєРёС… Р·РЅР°С‡РµРЅРёР№
+
+    float baseScaleX;
+    int facing = 1; // 1 = РІРїСЂР°РІРѕ, -1 = РІР»РµРІРѕ
+
+    void Awake()
+    {
+        if (!face) return;
+        baseScaleX = Mathf.Abs(face.localScale.x);
+        if (baseScaleX < 0.0001f) baseScaleX = 1f;
+    }
+
+    void Update()
+    {
+        if (!face) return;
+
+        float x = Input.GetAxisRaw("Horizontal"); // A/D
+        if (Mathf.Abs(x) <= deadZone) return;
+
+        facing = x > 0 ? 1 : -1;
+        int dir = invert ? -facing : facing;
+
+        var s = face.localScale;
+        s.x = baseScaleX * dir;
+        face.localScale = s;
+    }
+}
+===== E:\Unity\Projects\MineWorld\Assets\_Project\Scripts\Boss\BossAi.cs =====
+using UnityEngine;
+using System.Collections;
+
+public class BossAI : MonoBehaviour
+{
+    public enum BossState { Idle, Walk, Death }
+
+        [Header("AI")]
+        public float detectionRange = 10f;
+        public float meleeRange = 1.8f;
+        public float stopDistance = 0.3f;
+        public float moveSpeed = 2f;
+        public float farDistance = 6f;
+
+    [Header("Ground Check")]
+    public Transform groundCheck;
+    public float groundCheckRadius = 0.15f;
+    public LayerMask groundLayer;
+
+    [Header("Refs")]
+    public Animator animator;
+    public BossCombat combat;
+    public Collider2D bossHurtBox;
+
+    Rigidbody2D rb;
+    Collider2D bodyCollider;
+    Transform player;
+    BossHealth bossHealth;
+
+    BossState state = BossState.Idle;
+    bool isDead;
+    bool isGrounded;
+    bool isHurt;
+    int comboStep = 0;
+
+    void Awake()
+    {
+        rb = GetComponent<Rigidbody2D>();
+        bodyCollider = GetComponent<Collider2D>();
+        bossHealth = GetComponent<BossHealth>();
+
+        if (!animator) animator = GetComponentInChildren<Animator>();
+        if (!combat) combat = GetComponent<BossCombat>();
+
+        if (animator == null)
+            Debug.LogError("BossAI: Animator not found", this);
+        if (rb == null)
+            Debug.LogError("BossAI: Rigidbody2D not found", this);
+        if (combat == null)
+            Debug.LogError("BossAI: BossCombat not found", this);
+    }
+
+    void Start()
+    {
+        var p = GameObject.FindWithTag("Player");
+        if (p) player = p.transform;
+    }
+
+    void Update()
+    {
+        if (isDead) return;
+        if (player == null) return;
+
+        UpdateGrounded();
+
+        float dist = Vector2.Distance(transform.position, player.position);
+
+        switch (state)
+        {
+            case BossState.Idle:
+                animator.SetBool("IsWalking", false);
+                StopHorizontal();
+                if (dist <= detectionRange)
+                    state = BossState.Walk;
+                break;
+
+            case BossState.Walk:
+                if (combat == null) break;
+
+                if (dist > detectionRange)
+                {
+                    animator.SetBool("IsWalking", false);
+                    StopHorizontal();
+                    comboStep = 0;
+                    state = BossState.Idle;
+                    break;
+                }
+
+                if (combat.IsAttacking || isHurt)
+                {
+                    animator.SetBool("IsWalking", false);
+                    StopHorizontal();
+                    break;
+                }
+
+                FlipToPlayer();
+
+            if (combat.CanAttack)
+            {
+                if (dist <= meleeRange)
+                {
+                    if (comboStep == 0 || comboStep == 1)
+                    {
+                        combat.TryAttack(1);
+                        comboStep++;
+                    }
+                    else if (comboStep == 2)
+                    {
+                        combat.TryAttack(2);
+                        comboStep = 0;
+                    }
+                    break;
+                }
+                else if (dist > farDistance && isGrounded)
+                {
+                    combat.TryAttack(3);
+                    comboStep = 0;
+                    break;
+                }
+            }
+
+                animator.SetBool("IsWalking", true);
+                MoveToPlayer();
+                break;
+
+            case BossState.Death:
+                StopHorizontal();
+                break;
+        }
+    }
+
+    void UpdateGrounded()
+    {
+        if (!groundCheck) return;
+        isGrounded = Physics2D.OverlapCircle(
+            groundCheck.position,
+            groundCheckRadius,
+            groundLayer
+        );
+    }
+
+    void MoveToPlayer()
+    {
+        if (!player) return;
+
+        float dist = Vector2.Distance(transform.position, player.position);
+
+        if (dist < stopDistance)
+        {
+            StopHorizontal();
+            return;
+        }
+
+        if (dist < meleeRange)
+        {
+            StopHorizontal();
+            return;
+        }
+
+        float dir = player.position.x > transform.position.x ? 1f : -1f;
+        rb.linearVelocity = new Vector2(dir * moveSpeed, rb.linearVelocity.y);
+    }
+
+    void StopHorizontal()
+    {
+        rb.linearVelocity = new Vector2(0f, rb.linearVelocity.y);
+    }
+
+    public void TakeDamage(int dmg, Vector2 knockbackDir)
+    {
+        if (isDead) return;
+
+        if (bossHealth) bossHealth.TakeDamage(dmg);
+
+        if (!isHurt)
+            StartCoroutine(HurtRoutine());
+
+        if (knockbackDir != Vector2.zero && rb != null)
+        {
+            rb.linearVelocity = Vector2.zero;
+            rb.AddForce(knockbackDir.normalized * 3f, ForceMode2D.Impulse);
+        }
+    }
+
+    IEnumerator HurtRoutine()
+    {
+        isHurt = true;
+        animator.SetTrigger("Hurt");
+        yield return new WaitForSecondsRealtime(0.4f);
+        isHurt = false;
+    }
+
+    public void Die()
+    {
+        if (isDead) return;
+
+        isDead = true;
+        isHurt = false;
+        state = BossState.Death;
+        StopAllCoroutines();
+
+        rb.linearVelocity = Vector2.zero;
+        rb.simulated = false;
+
+        if (bodyCollider) bodyCollider.enabled = false;
+        if (bossHurtBox) bossHurtBox.enabled = false;
+        if (combat != null) combat.DisableHitbox();
+
+        animator.SetBool("IsWalking", false);
+        animator.SetTrigger("Death");
+
+        StartCoroutine(DeathRoutine());
+    }
+
+    IEnumerator DeathRoutine()
+    {
+        yield return new WaitForSecondsRealtime(5f);
+        Destroy(gameObject);
+    }
+
+    void FlipToPlayer()
+    {
+        if (player == null) return;
+        float diff = player.position.x - transform.position.x;
+        if (Mathf.Abs(diff) < 0.1f) return;
+        float dir = diff > 0 ? 1f : -1f;
+        Vector3 scale = transform.localScale;
+        scale.x = dir > 0 ? Mathf.Abs(scale.x) : -Mathf.Abs(scale.x);
+        transform.localScale = scale;
+    }
+
+    void OnDrawGizmosSelected()
+    {
+        Gizmos.color = Color.yellow;
+        Gizmos.DrawWireSphere(transform.position, detectionRange);
+        Gizmos.color = Color.magenta;
+        Gizmos.DrawWireSphere(transform.position, meleeRange);
+        Gizmos.color = Color.white;
+        Gizmos.DrawWireSphere(transform.position, stopDistance);
+
+        if (groundCheck)
+        {
+            Gizmos.color = Color.green;
+            Gizmos.DrawWireSphere(groundCheck.position, groundCheckRadius);
+        }
+    }
+}
+===== E:\Unity\Projects\MineWorld\Assets\_Project\Scripts\Boss\BossAttackHitbox.cs =====
+using UnityEngine;
+using System.Collections.Generic;
+
+public class BossAttackHitbox : MonoBehaviour
+{
+    [Header("Settings")]
+    public int damage = 1;
+
+    Collider2D col;
+    HashSet<Collider2D> hit = new HashSet<Collider2D>();
+    int playerLayer;
+
+    void Awake()
+    {
+        col = GetComponent<Collider2D>();
+        if (col == null)
+        {
+            Debug.LogError("No Collider2D on BossAttackHitbox");
+            return;
+        }
+        col.enabled = false;
+        playerLayer = LayerMask.NameToLayer("Player");
+    }
+
+    public void Activate()
+    {
+        hit.Clear();
+        col.enabled = true;
+    }
+
+    public void Deactivate()
+    {
+        col.enabled = false;
+        hit.Clear();
+    }
+
+    void OnTriggerEnter2D(Collider2D other)
+    {
+        TryHit(other);
+    }
+
+    void OnTriggerStay2D(Collider2D other)
+    {
+        TryHit(other);
+    }
+
+    void TryHit(Collider2D other)
+    {
+        if (other.gameObject.layer != playerLayer) return;
+        if (hit.Contains(other)) return;
+
+        PlayerHealth hp = other.GetComponentInParent<PlayerHealth>();
+        if (hp == null) return;
+
+        hit.Add(other);
+        hp.TakeDamage(damage);
+    }
+}
+===== E:\Unity\Projects\MineWorld\Assets\_Project\Scripts\Boss\BossCombat.cs =====
+using UnityEngine;
+using System.Collections;
+
+public class BossCombat : MonoBehaviour
+{
+    [Header("Attack Settings")]
+    public float attackCooldown = 2f;
+
+    [Header("Jump Attack")]
+    public float jumpDuration = 0.6f;
+    public float jumpArcHeight = 2f;
+    public float jumpHitboxDuration = 0.15f;
+    public float jumpRecoveryDelay = 0.1f;
+
+    [Header("Projectile")]
+    public float projectileSpeed = 8f;
+
+    [Header("References")]
+    public BossAttackHitbox attack1Hitbox;
+    public BossAttackHitbox attack2Hitbox;
+    public BossAttackHitbox attack3Hitbox;
+    public Transform projectileSpawnPoint;
+    public GameObject magicProjectilePrefab;
+
+    Animator animator;
+    Rigidbody2D rb;
+    Transform player;
+
+    float originalGravityScale;
+    bool canAttack = true;
+    bool isAttacking = false;
+    int currentAttackIndex = 0;
+    Coroutine cooldownRoutine;
+    Coroutine jumpRoutine;
+
+    public bool CanAttack => canAttack;
+    public bool IsAttacking => isAttacking;
+
+    void Awake()
+    {
+        animator = GetComponent<Animator>();
+        rb = GetComponent<Rigidbody2D>();
+        originalGravityScale = rb != null ? rb.gravityScale : 1f;
+
+        canAttack = true;
+        isAttacking = false;
+        currentAttackIndex = 0;
+
+        if (animator == null)
+            Debug.LogError("BossCombat: Animator not found", this);
+        if (rb == null)
+            Debug.LogError("BossCombat: Rigidbody2D not found", this);
+    }
+
+    void Start()
+    {
+        var p = GameObject.FindWithTag("Player");
+        if (p) player = p.transform;
+    }
+
+    public void TryAttack(int attackIndex)
+    {
+        if (!canAttack) return;
+        if (isAttacking) return;
+        if (attackIndex < 1 || attackIndex > 3) return;
+
+        currentAttackIndex = attackIndex;
+        StartAttack();
+    }
+
+    void StartAttack()
+    {
+        if (animator == null || rb == null)
+        {
+            currentAttackIndex = 0;
+            return;
+        }
+
+        if (currentAttackIndex < 1 || currentAttackIndex > 3)
+        {
+            isAttacking = false;
+            canAttack = true;
+            currentAttackIndex = 0;
+            return;
+        }
+
+        isAttacking = true;
+        canAttack = false;
+
+        animator.ResetTrigger("Attack1");
+        animator.ResetTrigger("Attack2");
+        animator.ResetTrigger("Attack3");
+
+        switch (currentAttackIndex)
+        {
+            case 1:
+                rb.linearVelocity = new Vector2(0f, rb.linearVelocity.y);
+                animator.SetTrigger("Attack1");
+                break;
+            case 2:
+                rb.linearVelocity = new Vector2(0f, rb.linearVelocity.y);
+                animator.SetTrigger("Attack2");
+                break;
+            case 3:
+                animator.SetTrigger("Attack3");
+                if (player != null)
+                {
+                    Vector2 target = new Vector2(player.position.x, transform.position.y);
+                    if (jumpRoutine != null) StopCoroutine(jumpRoutine);
+                    jumpRoutine = StartCoroutine(JumpToPlayer(target));
+                }
+                else
+                {
+                    isAttacking = false;
+                    canAttack = true;
+                    currentAttackIndex = 0;
+                }
+                break;
+        }
+    }
+
+    IEnumerator JumpToPlayer(Vector2 target)
+    {
+        rb.gravityScale = 0f;
+        rb.linearVelocity = Vector2.zero;
+
+        Vector2 start = rb.position;
+        float elapsed = 0f;
+
+        while (elapsed < jumpDuration)
+        {
+            if (!isAttacking)
+            {
+                rb.gravityScale = originalGravityScale;
+                jumpRoutine = null;
+                yield break;
+            }
+
+            elapsed += Time.deltaTime;
+            float t = Mathf.Clamp01(elapsed / jumpDuration);
+            float arc = Mathf.Sin(t * Mathf.PI) * jumpArcHeight;
+            Vector2 pos = Vector2.Lerp(start, target, t);
+            pos.y += arc;
+            rb.MovePosition(pos);
+            yield return null;
+        }
+
+        rb.gravityScale = originalGravityScale;
+        rb.linearVelocity = Vector2.zero;
+
+        EnableAttack3Hitbox();
+        yield return new WaitForSecondsRealtime(jumpHitboxDuration);
+        DisableHitbox();
+        yield return new WaitForSecondsRealtime(jumpRecoveryDelay);
+
+        jumpRoutine = null;
+        EndAttack();
+    }
+
+    public void EnableAttack1Hitbox()
+    {
+        if (attack1Hitbox) attack1Hitbox.Activate();
+    }
+
+    public void EnableAttack2Hitbox()
+    {
+        if (attack2Hitbox) attack2Hitbox.Activate();
+    }
+
+    public void EnableAttack3Hitbox()
+    {
+        if (attack3Hitbox) attack3Hitbox.Activate();
+    }
+
+    public void DisableHitbox()
+    {
+        if (attack1Hitbox) attack1Hitbox.Deactivate();
+        if (attack2Hitbox) attack2Hitbox.Deactivate();
+        if (attack3Hitbox) attack3Hitbox.Deactivate();
+    }
+
+    public void SpawnProjectile()
+    {
+        if (magicProjectilePrefab == null || projectileSpawnPoint == null) return;
+
+        GameObject proj = Instantiate(
+            magicProjectilePrefab,
+            projectileSpawnPoint.position,
+            Quaternion.identity
+        );
+
+        float dir = transform.localScale.x > 0 ? 1f : -1f;
+        Rigidbody2D rbProj = proj.GetComponent<Rigidbody2D>();
+        if (rbProj) rbProj.linearVelocity = new Vector2(dir * projectileSpeed, 0f);
+    }
+
+    public void EndAttack()
+    {
+        animator.ResetTrigger("Attack1");
+        animator.ResetTrigger("Attack2");
+        animator.ResetTrigger("Attack3");
+
+        if (!isAttacking) return;
+
+        if (jumpRoutine != null)
+        {
+            StopCoroutine(jumpRoutine);
+            jumpRoutine = null;
+            rb.gravityScale = originalGravityScale;
+        }
+
+        DisableHitbox();
+
+        if (rb != null)
+            rb.linearVelocity = new Vector2(0f, rb.linearVelocity.y);
+
+        isAttacking = false;
+
+        if (cooldownRoutine != null) StopCoroutine(cooldownRoutine);
+        cooldownRoutine = StartCoroutine(CooldownRoutine());
+    }
+
+    IEnumerator CooldownRoutine()
+        {
+            yield return new WaitForSecondsRealtime(attackCooldown);
+            canAttack = true;
+            cooldownRoutine = null;
+        }
+}
+===== E:\Unity\Projects\MineWorld\Assets\_Project\Scripts\Boss\bosshealth.cs =====
+using UnityEngine;
+using UnityEngine.UI;
+
+public class BossHealth : MonoBehaviour
+{
+    [Header("HP")]
+    public int maxHp = 30;
+    int hp;
+
+    [Header("UI вЂ” Р±РѕСЃСЃ Р±Р°СЂ СЃРЅРёР·Сѓ СЌРєСЂР°РЅР°")]
+    public Slider bossHpBar;
+    public GameObject bossHpPanel;
+
+    BossAI bossAI;
+
+    void Start()
+    {
+        hp = maxHp;
+        bossAI = GetComponent<BossAI>();
+
+        if (bossHpPanel) bossHpPanel.SetActive(false);
+        if (bossHpBar)
+        {
+            bossHpBar.maxValue = maxHp;
+            bossHpBar.value = maxHp;
+        }
+    }
+
+    public void ShowHpBar()
+    {
+        if (bossHpPanel) bossHpPanel.SetActive(true);
+    }
+
+    public void TakeDamage(int dmg)
+    {
+        if (hp <= 0) return;
+
+        ShowHpBar();
+        hp -= dmg;
+        hp = Mathf.Max(hp, 0);
+
+        if (bossHpBar) bossHpBar.value = hp;
+
+        if (hp <= 0)
+        {
+            if (bossAI) bossAI.Die();
+            if (bossHpPanel) bossHpPanel.SetActive(false);
+        }
+    }
+}
+===== E:\Unity\Projects\MineWorld\Assets\_Project\Scripts\Core\HitboxVisualizer.cs =====
+using UnityEngine;
+
+[RequireComponent(typeof(BoxCollider2D))]
+public class HitboxVisualizer : MonoBehaviour
+{
+    public Color color = new Color(1f, 0f, 0f, 0.35f);
+    public bool showInGame = true;
+
+    BoxCollider2D col;
+    GameObject visual;
+
+    void Awake()
+    {
+        col = GetComponent<BoxCollider2D>();
+        CreateVisual();
+    }
+
+    void CreateVisual()
+    {
+        visual = new GameObject("_HitboxVisual");
+        visual.transform.SetParent(transform);
+        visual.transform.localPosition = Vector3.zero;
+        visual.transform.localRotation = Quaternion.identity;
+        visual.transform.localScale = Vector3.one;
+
+        var sr = visual.AddComponent<SpriteRenderer>();
+        sr.sprite = CreateRectSprite();
+        sr.color = color;
+        sr.sortingOrder = 999;
+        visual.SetActive(false);
+    }
+
+    void Update()
+    {
+        if (visual == null) return;
+
+        // РїРѕРґРіРѕРЅСЏРµРј СЂР°Р·РјРµСЂ РїРѕРґ РєРѕР»Р»Р°Р№РґРµСЂ
+        visual.transform.localPosition = (Vector3)col.offset;
+        visual.transform.localScale = new Vector3(col.size.x, col.size.y, 1f);
+
+        var sr = visual.GetComponent<SpriteRenderer>();
+        if (sr) sr.color = color;
+    }
+
+    Sprite CreateRectSprite()
+    {
+        var tex = new Texture2D(1, 1);
+        tex.SetPixel(0, 0, Color.white);
+        tex.Apply();
+        return Sprite.Create(tex, new Rect(0, 0, 1, 1), new Vector2(0.5f, 0.5f), 1f);
+    }
+}
+===== E:\Unity\Projects\MineWorld\Assets\_Project\Scripts\Core\ParallaxBackground.cs =====
+using UnityEngine;
+
+public class ParallaxBackground : MonoBehaviour
+{
+    [Header("Parallax")]
+    [SerializeField] private float parallaxFactor = 0.5f;
+
+    [Header("Auto Scroll")]
+    [SerializeField] private float idleScrollSpeed = 0.1f;
+    [SerializeField] private float moveSpeedBonus = 0.15f;
+
+    [Header("References")]
+    [SerializeField] private Rigidbody2D playerRb;
+
+    private Camera cam;
+    private SpriteRenderer sourceRenderer;
+    private Transform[] segments;
+
+    private float spriteWidth;
+    private float baseX;
+    private float startY;
+    private float startZ;
+    private float autoScrollOffset;
+    private float lastCamX;
+
+    void Start()
+    {
+        cam = Camera.main;
+        sourceRenderer = GetComponent<SpriteRenderer>();
+
+        if (cam == null || sourceRenderer == null || sourceRenderer.sprite == null)
+        {
+            Debug.LogError("ParallaxBackground: missing camera or sprite.");
+            enabled = false;
+            return;
+        }
+
+        spriteWidth = sourceRenderer.bounds.size.x;
+        baseX  = transform.position.x;
+        startY = transform.position.y;
+        startZ = transform.position.z;
+        lastCamX = cam.transform.position.x;
+
+        segments = new Transform[3];
+        segments[0] = transform;
+
+        for (int i = 1; i < 3; i++)
+        {
+            GameObject copy = new GameObject(gameObject.name + "_seg" + i);
+            copy.transform.parent = transform.parent;
+
+            SpriteRenderer sr = copy.AddComponent<SpriteRenderer>();
+            sr.sprite        = sourceRenderer.sprite;
+            sr.sortingLayerID = sourceRenderer.sortingLayerID;
+            sr.sortingOrder  = sourceRenderer.sortingOrder;
+            sr.sharedMaterial = sourceRenderer.sharedMaterial;
+            sr.color         = sourceRenderer.color;
+            copy.transform.localScale = transform.localScale;
+            segments[i] = copy.transform;
+        }
+
+        segments[0].position = new Vector3(baseX,               startY, startZ);
+        segments[1].position = new Vector3(baseX - spriteWidth, startY, startZ);
+        segments[2].position = new Vector3(baseX + spriteWidth, startY, startZ);
+    }
+
+    void LateUpdate()
+    {
+        float camX = cam.transform.position.x;
+        float camDelta = camX - lastCamX;
+
+        float playerSpeedX = 0f;
+        if (playerRb != null)
+            playerSpeedX = Mathf.Abs(playerRb.linearVelocity.x);
+
+        float playerDirX = playerRb != null ? Mathf.Sign(playerRb.linearVelocity.x) : 1f;
+        float currentScrollSpeed = idleScrollSpeed + playerSpeedX * moveSpeedBonus;
+        autoScrollOffset += currentScrollSpeed * playerDirX * Time.deltaTime;
+
+        // РћР±РЅРѕРІР»СЏРµРј Р±Р°Р·Сѓ С‡РµСЂРµР· РґРµР»СЊС‚Сѓ РєР°РјРµСЂС‹ вЂ” СЃС‚Р°Р±РёР»СЊРЅС‹Р№ РїР°СЂР°Р»Р»Р°РєСЃ
+        baseX += camDelta * parallaxFactor;
+
+        // Р¤РёРЅР°Р»СЊРЅС‹Р№ СЃРґРІРёРі
+        float parallaxDelta = baseX + autoScrollOffset;
+
+        // РџРѕР·РёС†РёРѕРЅРёСЂСѓРµРј СЃРµРіРјРµРЅС‚С‹
+        for (int i = 0; i < segments.Length; i++)
+        {
+            float logicalOffset = Mathf.Round(
+                (segments[i].position.x - parallaxDelta) / spriteWidth
+            ) * spriteWidth;
+
+            segments[i].position = new Vector3(
+                parallaxDelta + logicalOffset,
+                startY,
+                startZ
+            );
+        }
+
+        // РџРµСЂРµСЂР°Р±РѕС‚РєР° СЃРµРіРјРµРЅС‚РѕРІ
+        float viewHalfWidth  = cam.orthographicSize * cam.aspect;
+        float recycleThreshold = spriteWidth + viewHalfWidth;
+
+        for (int i = 0; i < segments.Length; i++)
+        {
+            float dx = segments[i].position.x - camX;
+            if (dx < -recycleThreshold)
+                segments[i].position += new Vector3(spriteWidth * 3f, 0f, 0f);
+            else if (dx > recycleThreshold)
+                segments[i].position -= new Vector3(spriteWidth * 3f, 0f, 0f);
+        }
+
+        lastCamX = camX;
+    }
+}
+===== E:\Unity\Projects\MineWorld\Assets\_Project\Scripts\Enemy\EnemyAI.cs =====
+using UnityEngine;
+
+public class EnemyAI : MonoBehaviour
+{
+    public enum State { Idle, Chase, Attack, Return }
+
+    [Header("РџР°СЂР°РјРµС‚СЂС‹")]
+    public float aggroDistance = 5f;
+    public float attackDistance = 1.2f;
+    public float deAggroDistance = 10f;
+    public float moveSpeed = 2f;
+    public float returnSpeed = 3f;
+    public float attackCooldown = 1f;
+    public int damage = 2;
+
+    [Header("РџСЂС‹Р¶РѕРє")]
+    public float jumpForce = 8f;
+    public float wallCheckDistance = 0.3f;
+    public LayerMask groundLayer;
+
+    Rigidbody2D rb;
+    EnemyController controller;
+    Transform player;
+    float attackTimer;
+    State state = State.Idle;
+    Vector3 startPosition;
+    bool isGrounded;
+
+    public bool IsMoving => state == State.Chase || state == State.Return;
+
+    void Awake()
+    {
+        rb = GetComponent<Rigidbody2D>();
+        controller = GetComponent<EnemyController>();
+    }
+
+    void Start()
+    {
+        startPosition = transform.position;
+        var p = GameObject.FindWithTag("Player");
+        if (p) player = p.transform;
+    }
+
+    void Update()
+    {
+        if (player == null) return;
+
+        attackTimer -= Time.deltaTime;
+        float dist = Vector2.Distance(transform.position, player.position);
+
+        switch (state)
+        {
+            case State.Idle:
+                rb.linearVelocity = new Vector2(0, rb.linearVelocity.y);
+                if (dist <= aggroDistance)
+                    state = State.Chase;
+                break;
+
+            case State.Chase:
+                if (dist <= attackDistance)
+                    state = State.Attack;
+                else if (dist >= deAggroDistance)
+                    state = State.Return;
+                else
+                    MoveTowards(player.position);
+                break;
+
+            case State.Attack:
+                rb.linearVelocity = new Vector2(0, rb.linearVelocity.y);
+                if (dist > attackDistance)
+                {
+                    state = State.Chase;
+                    break;
+                }
+                if (attackTimer <= 0f)
+                {
+                    DoAttack();
+                    attackTimer = attackCooldown;
+                }
+                break;
+
+            case State.Return:
+                float distToStart = Vector2.Distance(transform.position, startPosition);
+                if (distToStart < 0.2f)
+                {
+                    rb.linearVelocity = new Vector2(0, rb.linearVelocity.y);
+                    state = State.Idle;
+                    var health = GetComponent<EnemyHealth>();
+                    if (health) health.ResetHealth();
+                }
+                else
+                {
+                    MoveTowards(startPosition, returnSpeed);
+                }
+                if (dist <= aggroDistance)
+                    state = State.Chase;
+                break;
+        }
+    }
+
+    void MoveTowards(Vector3 target, float speed = -1f)
+    {
+        if (speed < 0) speed = moveSpeed;
+        float dir = target.x > transform.position.x ? 1f : -1f;
+        rb.linearVelocity = new Vector2(dir * speed, rb.linearVelocity.y);
+
+        CheckAndJump(dir);
+
+        var sr = GetComponentInChildren<SpriteRenderer>();
+        if (sr)
+        {
+            Vector3 scale = sr.transform.localScale;
+            scale.x = dir > 0 ? Mathf.Abs(scale.x) : -Mathf.Abs(scale.x);
+            sr.transform.localScale = scale;
+        }
+
+        var hpBar = GetComponentInChildren<EnemyHpBar>();
+        if (hpBar)
+        {
+            Vector3 s = hpBar.transform.localScale;
+            s.x = dir > 0 ? Mathf.Abs(s.x) : -Mathf.Abs(s.x);
+            hpBar.transform.localScale = s;
+        }
+    }
+
+        void CheckAndJump(float dir)
+        {
+            isGrounded = Physics2D.OverlapBox(
+                new Vector2(transform.position.x, transform.position.y - 1.5f),
+                new Vector2(0.4f, 0.1f), 0f, groundLayer
+            );
+
+            bool wallAhead = Physics2D.Raycast(
+                transform.position,
+                new Vector2(dir, 0),
+                wallCheckDistance,
+                groundLayer
+            );
+
+            bool groundAhead = Physics2D.Raycast(
+                new Vector2(transform.position.x + dir * 0.5f, transform.position.y),
+                Vector2.down,
+                1.5f,
+                groundLayer
+            );
+
+            Debug.Log($"isGrounded={isGrounded}, wallAhead={wallAhead}, groundAhead={groundAhead}");
+
+            if ((wallAhead || !groundAhead) && isGrounded)
+                rb.linearVelocity = new Vector2(rb.linearVelocity.x, jumpForce);
+        }
+    void DoAttack()
+    {
+        var health = player.GetComponent<PlayerHealth>();
+        if (health == null)
+            health = player.GetComponentInParent<PlayerHealth>();
+        if (health != null)
+            health.TakeDamage(damage);
+    }
+
+    void OnDrawGizmosSelected()
+    {
+        Gizmos.color = Color.green;
+        Gizmos.DrawWireCube(
+            new Vector3(transform.position.x, transform.position.y - 1.5f, 0),
+            new Vector3(0.4f, 0.1f, 0)
+        );
+        Gizmos.color = Color.yellow;
+        Gizmos.DrawWireSphere(transform.position, aggroDistance);
+        Gizmos.color = Color.red;
+        Gizmos.DrawWireSphere(transform.position, attackDistance);
+        Gizmos.color = Color.blue;
+        Gizmos.DrawWireSphere(transform.position, deAggroDistance);
+    }
+}
+===== E:\Unity\Projects\MineWorld\Assets\_Project\Scripts\Enemy\EnemyAttack.cs =====
+using UnityEngine;
+
+public class EnemyAttack : MonoBehaviour
+{
+    [Header("РЈСЂРѕРЅ")]
+    public int damage = 1;
+    public float attackCooldown = 1f;
+
+    float cooldownTimer;
+
+    void Update()
+    {
+        if (cooldownTimer > 0)
+            cooldownTimer -= Time.deltaTime;
+    }
+
+    void OnCollisionStay2D(Collision2D col)
+    {
+        TryDamagePlayer(col.gameObject);
+    }
+
+    void OnCollisionEnter2D(Collision2D col)
+    {
+        TryDamagePlayer(col.gameObject);
+    }
+
+    void TryDamagePlayer(GameObject other)
+    {
+        if (cooldownTimer > 0) return;
+
+        var health = other.GetComponent<PlayerHealth>();
+        if (health == null)
+            health = other.GetComponentInParent<PlayerHealth>();
+
+        if (health != null)
+        {
+            health.TakeDamage(damage);
+            cooldownTimer = attackCooldown;
+        }
+    }
+}
+===== E:\Unity\Projects\MineWorld\Assets\_Project\Scripts\Enemy\EnemyController.cs =====
+using UnityEngine;
+using System.Collections;
+
+public class EnemyController : MonoBehaviour
+{
+    [Header("Knockback")]
+    public float knockbackForceX = 5f;
+    public float knockbackForceY = 3f;
+    public float knockbackDuration = 0.3f;
+
+    [Header("Flash РїСЂРё СѓРґР°СЂРµ")]
+    public SpriteRenderer spriteRenderer;
+    public Color hitColor = Color.red;
+    public float flashDuration = 0.1f;
+
+    [Header("Ground Check")]
+    public Transform groundCheck;
+    public Vector2 groundCheckSize = new Vector2(0.8f, 0.1f);
+    public LayerMask groundLayer;
+
+    Rigidbody2D rb;
+    bool isKnockedBack;
+    Color originalColor;
+    float lockedX;
+
+    public bool IsKnockedBack => isKnockedBack;
+
+    void Awake()
+    {
+        rb = GetComponent<Rigidbody2D>();
+        if (!spriteRenderer)
+            spriteRenderer = GetComponent<SpriteRenderer>();
+        if (spriteRenderer)
+            originalColor = spriteRenderer.color;
+        rb.constraints = RigidbodyConstraints2D.FreezeRotation;
+    }
+
+    void Start()
+    {
+        lockedX = transform.position.x;
+    }
+
+        void FixedUpdate()
+        {
+            if (!isKnockedBack)
+            {
+                var ai = GetComponent<EnemyAI>();
+                if (ai != null && ai.IsMoving)
+                {
+                    lockedX = transform.position.x;
+                    return;
+                }
+
+                rb.linearVelocity = new Vector2(0f, rb.linearVelocity.y);
+                transform.position = new Vector3(lockedX, transform.position.y, 0f);
+            }
+            else
+            {
+                lockedX = transform.position.x;
+            }
+        }
+
+    public void TakeKnockback(Vector2 direction)
+    {
+        if (isKnockedBack) return;
+        StartCoroutine(KnockbackRoutine(direction));
+    }
+
+    IEnumerator KnockbackRoutine(Vector2 direction)
+    {
+        isKnockedBack = true;
+
+        if (spriteRenderer)
+            spriteRenderer.color = hitColor;
+
+        rb.linearVelocity = Vector2.zero;
+        rb.AddForce(new Vector2(
+            direction.x * knockbackForceX,
+            knockbackForceY
+        ), ForceMode2D.Impulse);
+
+        yield return new WaitForSeconds(flashDuration);
+
+        if (spriteRenderer)
+            spriteRenderer.color = originalColor;
+
+        yield return new WaitForSeconds(knockbackDuration);
+
+        yield return new WaitUntil(() => IsGrounded());
+
+        rb.linearVelocity = Vector2.zero;
+        lockedX = transform.position.x;
+        isKnockedBack = false;
+    }
+
+    bool IsGrounded()
+    {
+        if (!groundCheck) return true;
+        return Physics2D.OverlapBox(
+            groundCheck.position, groundCheckSize, 0f, groundLayer);
+    }
+
+    void OnDrawGizmosSelected()
+    {
+        if (!groundCheck) return;
+        Gizmos.color = Color.yellow;
+        Gizmos.DrawWireCube(groundCheck.position, groundCheckSize);
+    }
+}
+===== E:\Unity\Projects\MineWorld\Assets\_Project\Scripts\Enemy\EnemyDeath.cs =====
+using UnityEngine;
+using System.Collections;
+
+public class EnemyDeath : MonoBehaviour
+{
+    [Header("РћСЃРєРѕР»РєРё")]
+    public int pieceCount = 6;
+    public float pieceSize = 0.2f;
+    public float explodeForce = 4f;
+    public float lifetime = 0.8f;
+
+    public void PlayDeath()
+    {
+        StartCoroutine(DeathRoutine());
+    }
+
+    IEnumerator DeathRoutine()
+    {
+        // СЃРєСЂС‹РІР°РµРј РѕСЂРёРіРёРЅР°Р»
+        var sr = GetComponent<SpriteRenderer>();
+        var col = GetComponent<Collider2D>();
+        var rb = GetComponent<Rigidbody2D>();
+
+        //if (sr) sr.enabled = false;
+        if (col) col.enabled = false;
+        if (rb) rb.simulated = false;
+
+        // СЃРїР°РІРЅРёРј РѕСЃРєРѕР»РєРё
+        for (int i = 0; i < pieceCount; i++)
+        {
+            var piece = new GameObject("Piece");
+            piece.transform.position = transform.position + 
+                new Vector3(Random.Range(-0.3f, 0.3f), Random.Range(-0.3f, 0.3f), 0f);
+
+            var psr = piece.AddComponent<SpriteRenderer>();
+            psr.sprite = CreateSquareSprite();
+            psr.color = sr ? sr.color : Color.white;
+            psr.sortingOrder = 10;
+
+            float s = Random.Range(pieceSize * 0.5f, pieceSize * 1.5f);
+            piece.transform.localScale = new Vector3(s, s, 1f);
+
+            var prb = piece.AddComponent<Rigidbody2D>();
+            prb.gravityScale = 2f;
+
+            Vector2 dir = new Vector2(
+                Random.Range(-1f, 1f),
+                Random.Range(0.5f, 1f)
+            ).normalized;
+            prb.AddForce(dir * explodeForce, ForceMode2D.Impulse);
+            prb.AddTorque(Random.Range(-5f, 5f));
+
+            Destroy(piece, lifetime);
+        }
+
+        // РїС‹Р»СЊ
+        SpawnDeathDust();
+
+        yield return new WaitForSeconds(0.1f);
+        Destroy(gameObject);
+    }
+
+    void SpawnDeathDust()
+    {
+        for (int i = 0; i < 8; i++)
+        {
+            var dust = new GameObject("DeathDust");
+            dust.transform.position = transform.position +
+                new Vector3(Random.Range(-0.4f, 0.4f), Random.Range(-0.2f, 0.2f), 0f);
+
+            var psr = dust.AddComponent<SpriteRenderer>();
+            psr.sprite = CreateSquareSprite();
+            psr.color = new Color(0.8f, 0.8f, 0.8f, 0.7f);
+            psr.sortingOrder = 9;
+
+            float s = Random.Range(0.05f, 0.15f);
+            dust.transform.localScale = new Vector3(s, s, 1f);
+
+            var prb = dust.AddComponent<Rigidbody2D>();
+            prb.gravityScale = 0.3f;
+
+            Vector2 dir = new Vector2(
+                Random.Range(-1f, 1f),
+                Random.Range(0.3f, 1f)
+            ).normalized;
+            prb.AddForce(dir * Random.Range(1f, 3f), ForceMode2D.Impulse);
+
+            Destroy(dust, 0.6f);
+        }
+    }
+
+    Sprite CreateSquareSprite()
+    {
+        var tex = new Texture2D(1, 1);
+        tex.SetPixel(0, 0, Color.white);
+        tex.Apply();
+        return Sprite.Create(tex, new Rect(0, 0, 1, 1), 
+            new Vector2(0.5f, 0.5f), 1f);
+    }
+}
+===== E:\Unity\Projects\MineWorld\Assets\_Project\Scripts\Enemy\EnemyHealth.cs =====
+using UnityEngine;
+
+public class EnemyHealth : MonoBehaviour
+{
+    public int maxHp = 3;
+    int hp;
+
+    [Header("UI")]
+    public EnemyHpBar hpBar;
+
+    EnemyController controller;
+    EnemyDeath death;
+
+    void Awake()
+    {
+        hp = maxHp;
+        controller = GetComponent<EnemyController>();
+        death = GetComponent<EnemyDeath>();
+        if (hpBar) hpBar.SetPercent(1f);
+    }
+
+    public void TakeDamage(int dmg, Vector2 knockbackDir)
+    {
+        hp -= dmg;
+
+        float p = Mathf.Clamp01((float)hp / maxHp);
+        if (hpBar) hpBar.SetPercent(p);
+
+        if (hp <= 0)
+        {
+            if (hpBar) hpBar.Hide();
+            if (death) death.PlayDeath();
+            else Destroy(gameObject);
+            return;
+        }
+
+        if (controller) controller.TakeKnockback(knockbackDir);
+    }
+
+    public void TakeDamage(int dmg)
+    {
+        TakeDamage(dmg, Vector2.right);
+    }
+
+    public void ResetHealth()
+{
+    hp = maxHp;
+    if (hpBar) hpBar.SetPercent(1f);
+}
+
+}
+===== E:\Unity\Projects\MineWorld\Assets\_Project\Scripts\Enemy\EnemyHpBar.cs =====
+using UnityEngine;
+
+public class EnemyHpBar : MonoBehaviour
+{
+    public SpriteRenderer fill;
+    public SpriteRenderer bg;  // в†ђ РґРѕР±Р°РІСЊ СЃСЃС‹Р»РєСѓ РЅР° Bg
+
+    float fullScaleX;
+    Vector3 startLocalPos;
+
+    void Start()
+    {
+        if (!fill || !bg) return;
+        // Р±РµСЂС‘Рј СЂР°Р·РјРµСЂ РїСЂСЏРјРѕ СЃ Bg РІ РјРѕРјРµРЅС‚ СЃС‚Р°СЂС‚Р°
+        fullScaleX = bg.transform.localScale.x;
+        fill.transform.localScale = new Vector3(
+            fullScaleX, 
+            fill.transform.localScale.y, 
+            1f);
+        startLocalPos = fill.transform.localPosition;
+        SetPercent(1f);
+    }
+
+    public void SetPercent(float p)
+    {
+        if (!fill) return;
+        p = Mathf.Clamp01(p);
+
+        float newScaleX = fullScaleX * p;
+        var t = fill.transform;
+        t.localScale = new Vector3(newScaleX, t.localScale.y, 1f);
+        t.localPosition = new Vector3(
+            startLocalPos.x - (fullScaleX - newScaleX) * 0.5f,
+            startLocalPos.y,
+            startLocalPos.z
+        );
+    }
+
+    public void Hide()
+    {
+        gameObject.SetActive(false);
+    }
+}
+===== E:\Unity\Projects\MineWorld\Assets\_Project\Scripts\Mentor\NPCInteract.cs =====
+using UnityEngine;
+using UnityEngine.UI;
+using TMPro;
+using System.Collections;
+
+public class NPCInteract : MonoBehaviour
+{
+    [Header("Р”РёР°Р»РѕРі")]
+    [TextArea(2, 5)]
+    public string[] dialogLines;
+
+    [Header("UI")]
+    public GameObject dialogPanel;
+    public TextMeshProUGUI dialogText;
+    public TextMeshProUGUI npcNameText;
+    public GameObject interactHint;
+
+    [Header("РќР°СЃС‚СЂРѕР№РєРё")]
+    public string npcName = "РњРµРЅС‚РѕСЂ";
+    public float interactDistance = 2f;
+    public float autoCloseDistance = 3.5f;
+    public float typeSpeed = 0.03f;
+
+    Transform player;
+    bool playerInRange;
+    bool isDialogOpen;
+    int currentLine;
+    bool isTyping;
+    bool dialogFinished;
+
+    void Start()
+    {
+        player = GameObject.FindWithTag("Player").transform;
+        if (npcNameText) npcNameText.text = npcName;
+        if (dialogPanel) dialogPanel.SetActive(false);
+        if (interactHint) interactHint.SetActive(false);
+    }
+
+    void Update()
+    {
+        if (player == null) return;
+
+        // Р¤Р»РёРї РІ СЃС‚РѕСЂРѕРЅСѓ РёРіСЂРѕРєР°
+        float dir = player.position.x - transform.position.x;
+        Vector3 scale = transform.localScale;
+        scale.x = dir > 0 ? Mathf.Abs(scale.x) : -Mathf.Abs(scale.x);
+        transform.localScale = scale;
+
+        float dist = Vector2.Distance(transform.position, player.position);
+        playerInRange = dist <= interactDistance;
+
+        // РђРІС‚РѕР·Р°РєСЂС‹С‚РёРµ РµСЃР»Рё РёРіСЂРѕРє РґР°Р»РµРєРѕ СѓС€С‘Р»
+        if (isDialogOpen && dist > autoCloseDistance)
+        {
+            CloseDialog();
+            return;
+        }
+
+        if (interactHint) interactHint.SetActive(playerInRange && !isDialogOpen);
+
+        if (playerInRange && Input.GetKeyDown(KeyCode.E))
+        {
+            if (!isDialogOpen)
+                OpenDialog();
+            else if (!isTyping)
+                NextLine();
+        }
+
+        if (isDialogOpen && Input.GetKeyDown(KeyCode.Escape))
+            CloseDialog();
+    }
+
+    void OpenDialog()
+    {
+        isDialogOpen = true;
+        if (dialogPanel) dialogPanel.SetActive(true);
+
+        if (dialogFinished)
+        {
+            // РїРѕРєР°Р·С‹РІР°РµРј РїРѕСЃС‚РѕСЏРЅРЅСѓСЋ СЂРµРїР»РёРєСѓ РјР°РіР°Р·РёРЅР°
+            if (dialogText)
+                dialogText.text = "[ РџРµСЂРµР№С‚Рё РІ РјР°РіР°Р·РёРЅ ]";
+        }
+        else
+        {
+            currentLine = 0;
+            ShowLine(currentLine);
+        }
+    }
+
+    void NextLine()
+    {
+        if (dialogFinished)
+        {
+            // С‚СѓС‚ РїРѕС‚РѕРј Р±СѓРґРµС‚ РѕС‚РєСЂС‹С‚РёРµ РјР°РіР°Р·РёРЅР°
+            CloseDialog();
+            return;
+        }
+
+        currentLine++;
+        if (currentLine >= dialogLines.Length)
+        {
+            dialogFinished = true;
+            if (dialogText)
+                dialogText.text = "[ РџРµСЂРµР№С‚Рё РІ РјР°РіР°Р·РёРЅ ]";
+        }
+        else
+        {
+            ShowLine(currentLine);
+        }
+    }
+
+    void CloseDialog()
+    {
+        isDialogOpen = false;
+        if (dialogPanel) dialogPanel.SetActive(false);
+    }
+
+    void ShowLine(int index)
+    {
+        if (dialogText)
+            StartCoroutine(TypeLine(dialogLines[index]));
+    }
+
+    IEnumerator TypeLine(string line)
+    {
+        isTyping = true;
+        dialogText.text = "";
+        foreach (char c in line)
+        {
+            dialogText.text += c;
+            yield return new WaitForSeconds(typeSpeed);
+        }
+        isTyping = false;
+    }
+}
+===== E:\Unity\Projects\MineWorld\Assets\_Project\Scripts\Player\HPBarPulse.cs =====
+using UnityEngine;
+using UnityEngine.UI;
+
+// РџРѕРІРµСЃСЊ РЅР° РѕР±СЉРµРєС‚ Fill РІРЅСѓС‚СЂРё HPBar
+public class HPBarPulse : MonoBehaviour
+{
+    [Header("Р¦РІРµС‚Р° РїСѓР»СЊСЃР°С†РёРё")]
+    public Color colorA = new Color(0.8f, 0.05f, 0.05f, 1f); // С‚С‘РјРЅРѕ-РєСЂР°СЃРЅС‹Р№
+    public Color colorB = new Color(1f, 0.2f, 0.1f, 1f);     // СЏСЂРєРѕ-РєСЂР°СЃРЅС‹Р№
+
+    [Header("РЎРєРѕСЂРѕСЃС‚СЊ Рё РёРЅС‚РµРЅСЃРёРІРЅРѕСЃС‚СЊ")]
+    public float pulseSpeed = 2f;      // СЃРєРѕСЂРѕСЃС‚СЊ РїСѓР»СЊСЃР°С†РёРё
+    public float waveSpeed = 3f;       // СЃРєРѕСЂРѕСЃС‚СЊ РІРѕР»РЅС‹ СЃР»РµРІР° РЅР°РїСЂР°РІРѕ
+    public float waveIntensity = 0.15f; // РёРЅС‚РµРЅСЃРёРІРЅРѕСЃС‚СЊ РІРѕР»РЅС‹
+
+    Image image;
+    float offset;
+
+    void Awake()
+    {
+        image = GetComponent<Image>();
+    }
+
+    void Update()
+    {
+        if (image == null) return;
+
+        offset += Time.deltaTime * waveSpeed;
+
+        // Р‘Р°Р·РѕРІР°СЏ РїСѓР»СЊСЃР°С†РёСЏ
+        float pulse = (Mathf.Sin(Time.time * pulseSpeed) + 1f) * 0.5f;
+
+        // Р’РѕР»РЅР° РїРѕРІРµСЂС… РїСѓР»СЊСЃР°С†РёРё
+        float wave = (Mathf.Sin(Time.time * waveSpeed + offset) + 1f) * 0.5f * waveIntensity;
+
+        image.color = Color.Lerp(colorA, colorB, pulse + wave);
+    }
+}
+===== E:\Unity\Projects\MineWorld\Assets\_Project\Scripts\Player\IdleBreath2D.cs =====
+using UnityEngine;
+
+public class IdleBreath2D : MonoBehaviour
+{
+    [Header("Breath")]
+    public float rotAmplitude = 1.5f;   // РіСЂР°РґСѓСЃС‹
+    public float posAmplitude = 0.01f;  // СЋРЅРёС‚С‹
+    public float speed = 2.0f;
+
+    Quaternion startRot;
+    Vector3 startPos;
+
+    void Awake()
+    {
+        startRot = transform.localRotation;
+        startPos = transform.localPosition;
+    }
+
+    void LateUpdate()
+    {
+        float t = Mathf.Sin(Time.time * speed);
+        transform.localRotation = startRot * Quaternion.Euler(0f, 0f, t * rotAmplitude);
+        transform.localPosition = startPos + new Vector3(0f, t * posAmplitude, 0f);
+    }
+}
+===== E:\Unity\Projects\MineWorld\Assets\_Project\Scripts\Player\PlayerAnimationBridge.cs =====
+using UnityEngine;
+
+// РџРѕРІРµСЃСЊ РЅР° SamuraiSprite
+public class PlayerAnimationBridge : MonoBehaviour
+{
+    PlayerController2D controller;
+
+    void Awake()
+    {
+        controller = GetComponentInParent<PlayerController2D>();
+    }
+
+    public void OnAttack1Enter()  => controller?.OnAttack1Enter();
+    public void OnAttack2Enter()  => controller?.OnAttack2Enter();
+    public void OnAttack3Enter()  => controller?.OnAttack3Enter();
+    public void EnableHitbox1()   => controller?.EnableHitbox1();
+    public void EnableHitbox2()   => controller?.EnableHitbox2();
+    public void EnableHitbox3()   => controller?.EnableHitbox3();
+    public void OnHitboxOff()     => controller?.OnHitboxOff();
+   public void OnAttackEnd()
+{
+    Debug.Log("Bridge: OnAttackEnd РІС‹Р·РІР°РЅ");
+    controller?.OnAttackEnd();
+}
+}
+===== E:\Unity\Projects\MineWorld\Assets\_Project\Scripts\Player\PlayerAttack2D.cs =====
+using UnityEngine;
+using System.Collections;
+
+public class PlayerAttack2D : MonoBehaviour
+{
+    public enum AttackType { Slash, Lunge, Low }
+
+    [Header("Refs")]
+    public SlashPivotSwing swing;
+    public Transform visualRoot;
+    public Transform attackRoot;
+    public GameObject attackVfx;
+    public Transform weaponRig;
+
+    [Header("Animator")]
+    public Animator animator;
+
+    [Header("Hitboxes")]
+    public Transform hitboxSlash;
+    public Transform hitboxLunge;
+    public Transform hitboxLow;
+
+    [Header("Р Р°Р·РјРµСЂС‹ С…РёС‚Р±РѕРєСЃРѕРІ")]
+    public Vector2 sizeSlash = new Vector2(1.2f, 0.8f);
+    public Vector2 sizeLunge = new Vector2(2f,   0.5f);
+    public Vector2 sizeLow   = new Vector2(1f,   0.6f);
+
+    [Header("РЈСЂРѕРЅ")]
+    public int damageSlash = 1;
+    public int damageLunge = 2;
+    public int damageLow   = 1;
+
+    [Header("Timing")]
+    public float cooldown    = 0.3f;
+    public float hitDelay    = 0.07f;
+
+    [Header("Facing")]
+    public LayerMask enemyLayer;
+
+    float cd;
+    int facing = 1;
+    Vector3 stanceDefault;
+
+    void Start()
+    {
+        if (!swing) swing = GetComponentInChildren<SlashPivotSwing>(true);
+        if (!visualRoot) visualRoot = transform.Find("VisualRoot");
+        if (visualRoot) stanceDefault = visualRoot.localPosition;
+
+        // Р•СЃР»Рё animator РЅРµ РЅР°Р·РЅР°С‡РµРЅ вЂ” РёС‰РµРј РЅР° SamuraiSprite
+        if (!animator) animator = GetComponentInChildren<Animator>();
+
+        SetHitboxActive(hitboxSlash, false);
+        SetHitboxActive(hitboxLunge, false);
+        SetHitboxActive(hitboxLow,   false);
+    }
+
+    void Update()
+    {
+        cd -= Time.deltaTime;
+        UpdateFacing();
+        ApplyFacing();
+
+        if (swing && visualRoot)
+            swing.transform.localRotation = Quaternion.Inverse(visualRoot.localRotation);
+
+        if (cd > 0f) return;
+
+        if (Input.GetMouseButtonDown(0) && Input.GetKey(KeyCode.LeftShift))
+        {
+            StartCoroutine(DoAttack(AttackType.Lunge));
+            cd = cooldown;
+        }
+        else if (Input.GetMouseButtonDown(0))
+        {
+            StartCoroutine(DoAttack(AttackType.Slash));
+            cd = cooldown;
+        }
+        else if (Input.GetMouseButtonDown(1))
+        {
+            StartCoroutine(DoAttack(AttackType.Low));
+            cd = cooldown;
+        }
+    }
+
+    IEnumerator DoAttack(AttackType type)
+    {
+        // Р—Р°РїСѓСЃРєР°РµРј Р°РЅРёРјР°С†РёСЋ Р°С‚Р°РєРё
+        if (animator)
+        {
+            switch (type)
+            {
+                case AttackType.Slash:
+                    animator.SetTrigger("Attack1");
+                    break;
+                case AttackType.Lunge:
+                    animator.SetTrigger("Attack2");
+                    break;
+                case AttackType.Low:
+                    animator.SetTrigger("Attack3");
+                    break;
+            }
+        }
+
+        if (swing) swing.PlaySwing(GetSwingType(type));
+        if (attackVfx) StartCoroutine(FlashVfx());
+
+        yield return new WaitForSeconds(hitDelay);
+
+        Transform hitbox = GetHitbox(type);
+        SetHitboxActive(hitbox, true);
+
+        var hits = Physics2D.OverlapBoxAll(
+            hitbox.position, GetSize(type), 0f, enemyLayer);
+
+        foreach (var h in hits)
+        {
+            Vector2 dir = (h.transform.position - transform.position).normalized;
+
+            var enemyHp = h.GetComponentInParent<EnemyHealth>();
+            if (enemyHp) enemyHp.TakeDamage(GetDamage(type), dir);
+
+            var bossAI = h.GetComponentInParent<BossAI>();
+            if (bossAI) bossAI.TakeDamage(GetDamage(type), dir);
+        }
+
+        yield return new WaitForSeconds(0.1f);
+        SetHitboxActive(hitbox, false);
+
+        yield return new WaitForSeconds(0.1f);
+        if (visualRoot) visualRoot.localPosition = stanceDefault;
+    }
+
+    void SetHitboxActive(Transform t, bool active)
+    {
+        if (!t) return;
+        var vis = t.Find("_HitboxVisual");
+        if (vis) vis.gameObject.SetActive(active);
+
+        var col = t.GetComponent<BoxCollider2D>();
+        if (col) col.enabled = active;
+    }
+
+    SlashPivotSwing.SwingType GetSwingType(AttackType type) => type switch
+    {
+        AttackType.Lunge => SlashPivotSwing.SwingType.Lunge,
+        AttackType.Low   => SlashPivotSwing.SwingType.Low,
+        _                => SlashPivotSwing.SwingType.Slash
+    };
+
+    Transform GetHitbox(AttackType type) => type switch
+    {
+        AttackType.Slash => hitboxSlash,
+        AttackType.Lunge => hitboxLunge,
+        AttackType.Low   => hitboxLow,
+        _                => hitboxSlash
+    };
+
+    Vector2 GetSize(AttackType type) => type switch
+    {
+        AttackType.Slash => sizeSlash,
+        AttackType.Lunge => sizeLunge,
+        AttackType.Low   => sizeLow,
+        _                => sizeSlash
+    };
+
+    int GetDamage(AttackType type) => type switch
+    {
+        AttackType.Slash => damageSlash,
+        AttackType.Lunge => damageLunge,
+        AttackType.Low   => damageLow,
+        _                => 1
+    };
+
+    void UpdateFacing()
+    {
+        float x = Input.GetAxisRaw("Horizontal");
+        if (x > 0.01f) facing = 1;
+        else if (x < -0.01f) facing = -1;
+    }
+
+    void ApplyFacing()
+    {
+        if (visualRoot)
+        {
+            Vector3 s = visualRoot.localScale;
+            s.x = Mathf.Abs(s.x) * facing;
+            visualRoot.localScale = s;
+        }
+
+        if (weaponRig)
+        {
+            Vector3 s = weaponRig.localScale;
+            s.x = Mathf.Abs(s.x) * facing;
+            weaponRig.localScale = s;
+        }
+    }
+
+    IEnumerator FlashVfx()
+    {
+        attackVfx.SetActive(true);
+        yield return new WaitForSeconds(0.08f);
+        attackVfx.SetActive(false);
+    }
+
+    void OnDrawGizmosSelected()
+    {
+        void Draw(Transform t, Vector2 s, Color c)
+        {
+            if (!t) return;
+            Gizmos.color = c;
+            Gizmos.DrawWireCube(t.position, s);
+        }
+        Draw(hitboxSlash, sizeSlash, Color.red);
+        Draw(hitboxLunge, sizeLunge, Color.blue);
+        Draw(hitboxLow,   sizeLow,   Color.green);
+    }
+}
+===== E:\Unity\Projects\MineWorld\Assets\_Project\Scripts\Player\PlayerAttackHitbox.cs =====
+using UnityEngine;
+
+// РџРѕРІРµСЃСЊ РЅР° РєР°Р¶РґС‹Р№ PlayerHitbox1/2/3
+public class PlayerAttackHitbox : MonoBehaviour
+{
+    [Header("Damage")]
+    public int damage = 10;
+
+    void OnTriggerEnter2D(Collider2D other)
+    {
+        // РџРѕРїР°Р»Рё РІ Р±РѕСЃСЃР°
+        BossHealth bossHealth = other.GetComponent<BossHealth>();
+        if (bossHealth != null)
+        {
+            bossHealth.TakeDamage(damage);
+            return;
+        }
+
+        // РџРѕРїР°Р»Рё РІ РѕР±С‹С‡РЅРѕРіРѕ РІСЂР°РіР°
+        EnemyHealth enemyHealth = other.GetComponent<EnemyHealth>();
+        if (enemyHealth != null)
+        {
+            enemyHealth.TakeDamage(damage);
+        }
+    }
+}
+===== E:\Unity\Projects\MineWorld\Assets\_Project\Scripts\Player\PlayerController2D.cs =====
+using UnityEngine;
+using System.Collections;
+
+public class PlayerController2D : MonoBehaviour
+{
+    [Header("Move")]
+    public float walkSpeed = 4f;
+    public float runSpeed = 8f;
+    public float maxSpeed = 12f;
+    public float airControlMultiplier = 0.6f;
+
+    [Header("Sprint (AA/DD)")]
+    public float doubleTapWindow = 1.0f;
+    public float sprintGraceTime = 0.15f;
+    bool isSprinting;
+    float lastForwardTap = -1f;
+    float lastBackTap = -1f;
+    int sprintDirection = 0;
+    float sprintGraceTimer = 0f;
+
+    [Header("Turn")]
+    bool isTurning;
+
+    [Header("Jump")]
+    public float jumpVelocity = 14f;
+    public float coyoteTime = 0.12f;
+    public float jumpBuffer = 0.12f;
+    public float jumpCutMultiplier = 0.5f;
+
+    [Header("Double Jump")]
+    public int maxJumps = 2;
+    int jumpCount;
+
+    [Header("Ground Check")]
+    public Transform groundCheck;
+    public Vector2 groundCheckSize = new Vector2(0.6f, 0.2f);
+    public LayerMask groundLayer;
+
+    [Header("Lean")]
+    public Transform visualRoot;
+    public float maxLean = 12f;
+    public float leanSpeed = 8f;
+
+    [Header("Animation")]
+    public Animator animator;
+
+    [Header("Combo")]
+    public float comboWindow = 0.5f;
+
+    [Header("Attack Hitboxes")]
+    public GameObject hitbox1;
+    public GameObject hitbox2;
+    public GameObject hitbox3;
+
+    Rigidbody2D rb;
+    float xInput;
+    float coyoteTimer;
+    float jumpBufferTimer;
+    bool isGrounded;
+    bool wasGrounded;
+
+    int currentAttack = 0;          // 0 = РЅРµС‚ Р°С‚Р°РєРё, 1/2/3 = С‚РµРєСѓС‰РёР№ СѓРґР°СЂ
+    bool animPlaying = false;       // Р¶РµСЃС‚РєРёР№ Р»РѕРє РЅР° РІСЂРµРјСЏ Р°РЅРёРјР°С†РёРё
+    bool inComboWindow = false;     // РѕС‚РєСЂС‹С‚Рѕ Р»Рё РѕРєРЅРѕ РґР»СЏ СЃР»РµРґСѓСЋС‰РµРіРѕ СѓРґР°СЂР°
+    bool comboConsumed = false;     // РёСЃРїРѕР»СЊР·РѕРІР°РЅ Р»Рё РєР»РёРє РІ С‚РµРєСѓС‰РµРј РѕРєРЅРµ
+    Coroutine comboWindowRoutine;
+
+    void Awake()
+    {
+        rb = GetComponent<Rigidbody2D>();
+        SetAllHitboxes(false);
+    }
+
+    void Update()
+    {
+        HandleFlip();
+        HandleSprintDetection();
+        HandleTurnDetection();
+
+        xInput = Input.GetAxisRaw("Horizontal");
+
+        if (Input.GetKeyDown(KeyCode.Space))
+            jumpBufferTimer = jumpBuffer;
+        else
+            jumpBufferTimer -= Time.deltaTime;
+
+        wasGrounded = isGrounded;
+        isGrounded = Physics2D.OverlapBox(groundCheck.position, groundCheckSize, 0f, groundLayer);
+
+        if (isGrounded && !wasGrounded)
+        {
+            jumpCount = 0;
+            isSprinting = false;
+            sprintDirection = 0;
+            if (animator != null) animator.ResetTrigger("JumpTrigger");
+        }
+
+        if (isGrounded) coyoteTimer = coyoteTime;
+        else coyoteTimer -= Time.deltaTime;
+
+        if (jumpBufferTimer > 0f && coyoteTimer > 0f)
+        {
+            DoJump();
+            jumpBufferTimer = 0f;
+            coyoteTimer = 0f;
+        }
+        else if (Input.GetKeyDown(KeyCode.Space) && !isGrounded && jumpCount < maxJumps)
+        {
+            DoJump();
+        }
+
+        if (Input.GetKeyUp(KeyCode.Space) && rb.linearVelocity.y > 0f)
+            rb.linearVelocity = new Vector2(rb.linearVelocity.x, rb.linearVelocity.y * jumpCutMultiplier);
+
+        if (Mathf.Abs(xInput) < 0.1f)
+        {
+            sprintGraceTimer -= Time.deltaTime;
+            if (sprintGraceTimer <= 0f && !isTurning)
+            {
+                isSprinting = false;
+                sprintDirection = 0;
+            }
+        }
+        else
+        {
+            sprintGraceTimer = sprintGraceTime;
+        }
+
+        HandleAttackInput();
+
+        if (animator != null)
+        {
+            animator.SetBool("IsRunning", Mathf.Abs(xInput) > 0.1f);
+            animator.SetBool("IsSprinting", isSprinting);
+            animator.SetBool("IsTurning", isTurning);
+            animator.SetBool("IsGrounded", isGrounded);
+            animator.SetBool("IsFalling", rb.linearVelocity.y < -1f && !isGrounded);
+        }
+    }
+
+    void HandleAttackInput()
+    {
+        if (!Input.GetMouseButtonDown(0)) return;
+        if (animator == null) return;
+        if (animator.GetBool("InHitstun")) return;
+
+        // Р–РµСЃС‚РєРёР№ Р»РѕРє: РїРѕРєР° Р°РЅРёРјР°С†РёСЏ РёРґРµС‚, Р»СЋР±С‹Рµ РєР»РёРєРё РёРіРЅРѕСЂ
+        if (animPlaying) return;
+
+        // Р•СЃР»Рё РѕРєРЅРѕ РЅРµ РѕС‚РєСЂС‹С‚Рѕ вЂ” СЃС‚Р°СЂС‚СѓРµРј С‚РѕР»СЊРєРѕ РїРµСЂРІСѓСЋ Р°С‚Р°РєСѓ
+        if (!inComboWindow)
+        {
+            StartAttack(1);
+            return;
+        }
+
+        // Р•СЃР»Рё РѕРєРЅРѕ РѕС‚РєСЂС‹С‚Рѕ вЂ” СЂРѕРІРЅРѕ РѕРґРёРЅ РєР»РёРє РЅР° СЃР»РµРґСѓСЋС‰РёР№ СѓРґР°СЂ
+        if (inComboWindow && !comboConsumed && currentAttack > 0 && currentAttack < 3)
+        {
+            comboConsumed = true;
+            inComboWindow = false;
+            StartAttack(currentAttack + 1);
+        }
+    }
+
+    void StartAttack(int step)
+    {
+        if (step < 1 || step > 3) return;
+        if (animator == null) return;
+
+        if (comboWindowRoutine != null)
+        {
+            StopCoroutine(comboWindowRoutine);
+            comboWindowRoutine = null;
+        }
+
+        if (visualRoot) visualRoot.localPosition = Vector3.zero;
+
+        currentAttack = step;
+        animPlaying = true;
+        inComboWindow = false;
+        comboConsumed = false;
+
+        animator.SetInteger("ActionType", step - 1); // 0,1,2
+        animator.ResetTrigger("DoAction");
+        animator.SetTrigger("DoAction");
+    }
+
+    IEnumerator ComboWindowRoutine()
+    {
+        yield return new WaitForSeconds(comboWindow);
+
+        if (inComboWindow && !animPlaying)
+            ResetCombo();
+
+        comboWindowRoutine = null;
+    }
+
+    // ===== Animation Events =====
+
+    public void OnAttack1Enter()
+    {
+        currentAttack = 1;
+        animPlaying = true;
+    }
+
+    public void OnAttack2Enter()
+    {
+        currentAttack = 2;
+        animPlaying = true;
+    }
+
+    public void OnAttack3Enter()
+    {
+        currentAttack = 3;
+        animPlaying = true;
+    }
+
+    public void EnableHitbox1()
+    {
+        SetAllHitboxes(false);
+        if (hitbox1) hitbox1.SetActive(true);
+    }
+
+    public void EnableHitbox2()
+    {
+        SetAllHitboxes(false);
+        if (hitbox2) hitbox2.SetActive(true);
+    }
+
+    public void EnableHitbox3()
+    {
+        SetAllHitboxes(false);
+        if (hitbox3) hitbox3.SetActive(true);
+    }
+
+    public void OnHitboxOff()
+    {
+        SetAllHitboxes(false);
+    }
+
+    public void OnAttackEnd()
+    {
+        if (currentAttack <= 0) return;
+
+        animPlaying = false;
+        SetAllHitboxes(false);
+
+        if (currentAttack < 3)
+        {
+            inComboWindow = true;
+            comboConsumed = false;
+
+            if (comboWindowRoutine != null)
+                StopCoroutine(comboWindowRoutine);
+
+            comboWindowRoutine = StartCoroutine(ComboWindowRoutine());
+        }
+        else
+        {
+            ResetCombo();
+        }
+    }
+
+    void ResetCombo()
+    {
+        if (comboWindowRoutine != null)
+        {
+            StopCoroutine(comboWindowRoutine);
+            comboWindowRoutine = null;
+        }
+
+        currentAttack = 0;
+        animPlaying = false;
+        inComboWindow = false;
+        comboConsumed = false;
+        SetAllHitboxes(false);
+    }
+
+    void SetAllHitboxes(bool active)
+    {
+        if (hitbox1) hitbox1.SetActive(active);
+        if (hitbox2) hitbox2.SetActive(active);
+        if (hitbox3) hitbox3.SetActive(active);
+    }
+
+    public void OnDashStarted()
+    {
+        ResetCombo();
+    }
+
+    public void OnHit()
+    {
+        if (animator == null) return;
+
+        ResetCombo();
+        animator.SetBool("InHitstun", true);
+        animator.SetBool("CanAct", false);
+    }
+
+    public void OnHitstunEnd()
+    {
+        if (animator == null) return;
+
+        animator.ResetTrigger("DoAction");
+        animator.SetBool("InHitstun", false);
+        animator.SetBool("CanAct", true);
+    }
+
+    public int JumpCount => jumpCount;
+    public bool IsGrounded => isGrounded;
+    public bool IsSprinting => isSprinting;
+
+    void HandleFlip()
+    {
+        if (!visualRoot) return;
+
+        if (xInput > 0.1f)
+            visualRoot.localScale = new Vector3(
+                Mathf.Abs(visualRoot.localScale.x),
+                visualRoot.localScale.y,
+                visualRoot.localScale.z
+            );
+        else if (xInput < -0.1f)
+            visualRoot.localScale = new Vector3(
+                -Mathf.Abs(visualRoot.localScale.x),
+                visualRoot.localScale.y,
+                visualRoot.localScale.z
+            );
+    }
+
+    void HandleSprintDetection()
+    {
+        if (Input.GetKeyDown(KeyCode.D) || Input.GetKeyDown(KeyCode.RightArrow))
+        {
+            if (Time.time - lastForwardTap < doubleTapWindow)
+            {
+                isSprinting = true;
+                sprintDirection = 1;
+                sprintGraceTimer = sprintGraceTime;
+            }
+            lastForwardTap = Time.time;
+        }
+
+        if (Input.GetKeyDown(KeyCode.A) || Input.GetKeyDown(KeyCode.LeftArrow))
+        {
+            if (Time.time - lastBackTap < doubleTapWindow)
+            {
+                isSprinting = true;
+                sprintDirection = -1;
+                sprintGraceTimer = sprintGraceTime;
+            }
+            lastBackTap = Time.time;
+        }
+    }
+
+    void HandleTurnDetection()
+    {
+        if (!isSprinting || Mathf.Abs(xInput) < 0.1f)
+        {
+            isTurning = false;
+            return;
+        }
+
+        int currentDir = xInput > 0 ? 1 : -1;
+        isTurning = (currentDir != sprintDirection);
+
+        if (isTurning)
+            sprintDirection = currentDir;
+    }
+
+    void DoJump()
+    {
+        if (animator != null)
+            animator.ResetTrigger("JumpTrigger");
+
+        jumpCount++;
+        rb.linearVelocity = new Vector2(rb.linearVelocity.x, jumpVelocity);
+
+        if (animator != null)
+        {
+            if (jumpCount >= 2) animator.SetTrigger("DoubleJumpTrigger");
+            else animator.SetTrigger("JumpTrigger");
+        }
+    }
+
+    void FixedUpdate()
+    {
+        var dash = GetComponent<PlayerDash2D>();
+        if (dash != null && dash.IsDashing) return;
+
+        float targetSpeed = Mathf.Min(isSprinting ? runSpeed : walkSpeed, maxSpeed);
+        float control = isGrounded ? 1f : airControlMultiplier;
+        rb.linearVelocity = new Vector2(xInput * targetSpeed * control, rb.linearVelocity.y);
+    }
+
+    void OnDrawGizmosSelected()
+    {
+        if (!groundCheck) return;
+        Gizmos.color = Color.yellow;
+        Gizmos.DrawWireCube(groundCheck.position, groundCheckSize);
+    }
+}
+===== E:\Unity\Projects\MineWorld\Assets\_Project\Scripts\Player\PlayerDash2D.cs =====
+using UnityEngine;
+using System.Collections;
+
+public class PlayerDash2D : MonoBehaviour
+{
+    [Header("Ground Dash")]
+    public float dashDistance = 2.5f;
+    public float dashDuration = 0.3f;
+    public float dashCooldown = 0.8f;
+
+    [Header("Air Dash (1Р№ РїСЂС‹Р¶РѕРє)")]
+    public float airDashDistance = 3f;
+    public float airDashDuration = 0.3f;
+
+    [Header("Special Dash (2Р№ РїСЂС‹Р¶РѕРє)")]
+    public float specialDashDistance = 5f;
+    public float specialDashDuration = 0.3f;
+
+    [Header("Visual")]
+    public Transform visualRoot;
+    public float dashLeanAngle = 35f;
+
+    [Header("Trail вЂ” РїС‹Р»СЊ")]
+    public GameObject dustPrefab;
+    public Transform dustSpawnPoint;
+    public float dustInterval = 0.05f;
+
+    [Header("I-frames")]
+    public Collider2D playerCollider;
+    public LayerMask enemyLayer;
+
+    Rigidbody2D rb;
+    Animator animator;
+    PlayerController2D controller;
+
+    bool isDashing;
+    bool canDash = true;
+    bool airDashUsed = false;
+    int lastJumpCount = 0;
+    int facing = 1;
+    float lockedY;
+
+    void Awake()
+    {
+        rb = GetComponent<Rigidbody2D>();
+        animator = GetComponentInChildren<Animator>();
+        controller = GetComponent<PlayerController2D>();
+
+        if (!playerCollider)
+            playerCollider = GetComponent<Collider2D>();
+    }
+
+    void Update()
+    {
+        float x = Input.GetAxisRaw("Horizontal");
+        if (x > 0.01f) facing = 1;
+        else if (x < -0.01f) facing = -1;
+
+        if (controller != null)
+        {
+            if (controller.IsGrounded)
+            {
+                airDashUsed = false;
+                lastJumpCount = 0;
+            }
+            else if (controller.JumpCount != lastJumpCount)
+            {
+                airDashUsed = false;
+                lastJumpCount = controller.JumpCount;
+            }
+        }
+
+        if (Input.GetKeyDown(KeyCode.LeftShift) && !isDashing)
+        {
+            if (controller != null && controller.IsGrounded && canDash)
+            {
+                StartCoroutine(DashRoutine(DashType.Ground));
+            }
+            else if (controller != null && !controller.IsGrounded && !airDashUsed)
+            {
+                airDashUsed = true;
+                if (controller.JumpCount >= 2)
+                    StartCoroutine(DashRoutine(DashType.Special));
+                else
+                    StartCoroutine(DashRoutine(DashType.Air));
+            }
+        }
+    }
+
+    void FixedUpdate()
+    {
+        if (isDashing)
+        {
+            transform.position = new Vector3(
+                transform.position.x,
+                lockedY,
+                transform.position.z);
+        }
+    }
+
+    enum DashType { Ground, Air, Special }
+
+    IEnumerator DashRoutine(DashType type)
+    {
+        isDashing = true;
+
+        // РЎР±СЂР°СЃС‹РІР°РµРј РєРѕРјР±Рѕ РїСЂРё СЃС‚Р°СЂС‚Рµ РґР°С€Р°
+        if (controller != null) controller.OnDashStarted();
+
+        if (type == DashType.Ground) canDash = false;
+
+        lockedY = transform.position.y;
+
+        if (animator)
+        {
+            switch (type)
+            {
+                case DashType.Ground:
+                    animator.SetBool("IsDashing", true);
+                    break;
+                case DashType.Air:
+                    animator.SetBool("IsAirDashing", true);
+                    break;
+                case DashType.Special:
+                    animator.SetBool("IsSpecialDashing", true);
+                    break;
+            }
+        }
+
+        SetEnemyCollision(false);
+        StartCoroutine(SpawnDust());
+
+        if (visualRoot)
+            StartCoroutine(LeanRoutine());
+
+        float origGravity = rb.gravityScale;
+        rb.gravityScale = 0f;
+
+        float dist = type == DashType.Ground  ? dashDistance        :
+                     type == DashType.Air     ? airDashDistance     : specialDashDistance;
+        float dur  = type == DashType.Ground  ? dashDuration        :
+                     type == DashType.Air     ? airDashDuration     : specialDashDuration;
+
+        float speed = dist / dur;
+        rb.linearVelocity = new Vector2(facing * speed, 0f);
+
+        yield return new WaitForSeconds(dur);
+
+        rb.gravityScale = origGravity;
+        rb.linearVelocity = new Vector2(0f, rb.linearVelocity.y);
+
+        SetEnemyCollision(true);
+
+        // РЎР±СЂР°СЃС‹РІР°РµРј РІСЃРµ dash-СЃРѕСЃС‚РѕСЏРЅРёСЏ
+        if (animator)
+        {
+            animator.SetBool("IsDashing",        false);
+            animator.SetBool("IsAirDashing",     false);
+            animator.SetBool("IsSpecialDashing", false);
+        }
+
+        isDashing = false;
+
+        if (type == DashType.Ground)
+        {
+            yield return new WaitForSeconds(dashCooldown);
+            canDash = true;
+        }
+    }
+
+    IEnumerator LeanRoutine()
+    {
+        float targetAngle = facing * dashLeanAngle;
+        float t = 0f;
+
+        while (t < 1f)
+        {
+            t += Time.deltaTime / 0.03f;
+            float angle = Mathf.LerpAngle(0f, targetAngle, t);
+            visualRoot.localRotation = Quaternion.Euler(0f, 0f, angle);
+            yield return null;
+        }
+
+        yield return new WaitForSeconds(dashDuration - 0.05f);
+
+        t = 0f;
+        while (t < 1f)
+        {
+            t += Time.deltaTime / 0.08f;
+            float angle = Mathf.LerpAngle(targetAngle, 0f, t);
+            visualRoot.localRotation = Quaternion.Euler(0f, 0f, angle);
+            yield return null;
+        }
+    }
+
+    IEnumerator SpawnDust()
+    {
+        if (!dustPrefab || !dustSpawnPoint) yield break;
+
+        float elapsed = 0f;
+        float dur = dashDuration;
+        while (elapsed < dur)
+        {
+            Instantiate(dustPrefab, dustSpawnPoint.position, Quaternion.identity);
+            yield return new WaitForSeconds(dustInterval);
+            elapsed += dustInterval;
+        }
+    }
+
+    void SetEnemyCollision(bool enable)
+    {
+        var enemies = FindObjectsByType<Collider2D>(FindObjectsSortMode.None);
+        foreach (var e in enemies)
+        {
+            if (((1 << e.gameObject.layer) & enemyLayer) != 0)
+                Physics2D.IgnoreCollision(playerCollider, e, !enable);
+        }
+    }
+
+    public bool IsDashing => isDashing;
+}
+===== E:\Unity\Projects\MineWorld\Assets\_Project\Scripts\Player\PlayerHealth.cs =====
+using UnityEngine;
+using UnityEngine.UI;
+using UnityEngine.SceneManagement;
+using System.Collections;
+using TMPro;
+
+public class PlayerHealth : MonoBehaviour
+{
+    [Header("Health")]
+    public int maxHealth = 5;
+    int currentHealth;
+    bool isDead;
+
+    [Header("UI")]
+    public Slider hpBar;
+    public TextMeshProUGUI youDiedText;
+    public Image deathOverlay;
+    public Button restartButton;
+
+    [Header("Invincibility")]
+    public float invincibleTime = 0.5f;
+    float invincibleTimer;
+
+    [Header("Knockback")]
+    public float knockbackForce = 10f;
+    public float knockbackDuration = 0.25f;
+
+    [Header("Feedback")]
+    public SpriteRenderer spriteRenderer;
+    public float flashDuration = 0.08f;
+    public float hitstopDuration = 0.05f;
+
+    PlayerDash2D dash;
+    Rigidbody2D rb;
+    PlayerController2D controller;
+    Coroutine hitstopRoutine;
+
+    void Start()
+    {
+        currentHealth = maxHealth;
+        dash = GetComponent<PlayerDash2D>();
+        rb = GetComponent<Rigidbody2D>();
+        controller = GetComponent<PlayerController2D>();
+
+        if (spriteRenderer == null)
+            spriteRenderer = GetComponentInChildren<SpriteRenderer>();
+
+        UpdateUI();
+
+        if (youDiedText) youDiedText.gameObject.SetActive(false);
+        if (deathOverlay) deathOverlay.gameObject.SetActive(false);
+        if (restartButton) restartButton.gameObject.SetActive(false);
+
+        if (restartButton)
+            restartButton.onClick.AddListener(Restart);
+    }
+
+    void Update()
+    {
+        if (invincibleTimer > 0)
+            invincibleTimer -= Time.deltaTime;
+
+        if (Input.GetKeyDown(KeyCode.R))
+            Restart();
+    }
+
+    public void TakeDamage(int damage, Vector2 knockbackDir = default)
+    {
+        if (isDead) return;
+        if (damage <= 0) return;
+        if (dash != null && dash.IsDashing) return;
+        if (invincibleTimer > 0) return;
+
+        currentHealth -= damage;
+        invincibleTimer = invincibleTime;
+        UpdateUI();
+
+        if (controller) controller.OnHit();
+
+        StartCoroutine(FlashRoutine());
+
+        if (hitstopRoutine == null)
+            hitstopRoutine = StartCoroutine(HitstopRoutine());
+
+        if (knockbackDir != Vector2.zero && rb != null)
+            StartCoroutine(ApplyKnockback(knockbackDir));
+        else
+            StartCoroutine(ResetHitstunAfterDelay());
+
+        if (currentHealth <= 0)
+            Die();
+    }
+
+    IEnumerator FlashRoutine()
+    {
+        if (spriteRenderer == null) yield break;
+        Color originalColor = spriteRenderer.color;
+        spriteRenderer.color = Color.white;
+        yield return new WaitForSecondsRealtime(flashDuration);
+        spriteRenderer.color = originalColor;
+    }
+
+    IEnumerator HitstopRoutine()
+    {
+        Time.timeScale = 0f;
+        yield return new WaitForSecondsRealtime(hitstopDuration);
+        Time.timeScale = 1f;
+        hitstopRoutine = null;
+    }
+
+    IEnumerator ApplyKnockback(Vector2 dir)
+    {
+        if (controller) controller.enabled = false;
+
+        rb.linearVelocity = Vector2.zero;
+        rb.AddForce(dir.normalized * knockbackForce, ForceMode2D.Impulse);
+
+        yield return new WaitForSecondsRealtime(knockbackDuration);
+
+        if (controller) controller.enabled = true;
+        if (controller) controller.OnHitstunEnd();
+    }
+
+    IEnumerator ResetHitstunAfterDelay()
+    {
+        yield return new WaitForSecondsRealtime(knockbackDuration);
+        if (controller) controller.OnHitstunEnd();
+    }
+
+    void Die()
+    {
+        if (isDead) return;
+        isDead = true;
+        StartCoroutine(DieRoutine());
+    }
+
+    IEnumerator DieRoutine()
+    {
+        if (controller) controller.enabled = false;
+        if (rb) rb.linearVelocity = Vector2.zero;
+
+        if (deathOverlay)
+        {
+            deathOverlay.gameObject.SetActive(true);
+            var c = deathOverlay.color;
+            c.a = 0f;
+            deathOverlay.color = c;
+        }
+
+        if (youDiedText)
+        {
+            youDiedText.gameObject.SetActive(true);
+            var c = youDiedText.color;
+            c.a = 0f;
+            youDiedText.color = c;
+        }
+
+        float elapsed = 0f;
+        float fadeDuration = 1.5f;
+        float overlayTargetAlpha = 0.7f;
+
+        while (elapsed < fadeDuration)
+        {
+            elapsed += Time.deltaTime;
+            float t = Mathf.Clamp01(elapsed / fadeDuration);
+
+            if (deathOverlay)
+            {
+                var c = deathOverlay.color;
+                c.a = t * overlayTargetAlpha;
+                deathOverlay.color = c;
+            }
+
+            if (youDiedText)
+            {
+                var c = youDiedText.color;
+                c.a = t;
+                youDiedText.color = c;
+            }
+
+            yield return null;
+        }
+
+        yield return new WaitForSecondsRealtime(0.3f);
+        if (restartButton) restartButton.gameObject.SetActive(true);
+    }
+
+    void Restart()
+    {
+        SceneManager.LoadScene(SceneManager.GetActiveScene().name);
+    }
+
+    void UpdateUI()
+    {
+        if (hpBar)
+        {
+            hpBar.maxValue = maxHealth;
+            hpBar.value = currentHealth;
+        }
+    }
+}
+===== E:\Unity\Projects\MineWorld\Assets\_Project\Scripts\Player\SlashPivotSwing.cs =====
+using UnityEngine;
+using System.Collections;
+
+public class SlashPivotSwing : MonoBehaviour
+{
+    public enum SwingType { Slash, Lunge, Low }
+
+    [Header("Slash вЂ” РіРѕСЂРёР·РѕРЅС‚Р°Р»СЊРЅС‹Р№ СѓРґР°СЂ")]
+    public float slashWindup  = 30f;
+    public float slashAttack  = -80f;
+    public float slashReturn  = 0f;
+
+    [Header("Lunge вЂ” РІС‹РїР°Рґ РІРїРµСЂС‘Рґ")]
+    public float lungeWindup  = 20f;
+    public float lungeAttack  = -20f;
+    public float lungeReturn  = 0f;
+
+    [Header("Low вЂ” СѓРґР°СЂ СЃРЅРёР·Сѓ")]
+    public float lowWindup    = -60f;
+    public float lowAttack    = 30f;
+    public float lowReturn    = 0f;
+
+    [Header("Timing")]
+    public float windupTime = 0.06f;
+    public float attackTime = 0.08f;
+    public float returnTime = 0.12f;
+
+    bool swinging;
+
+    public void PlaySwing(SwingType type = SwingType.Slash)
+    {
+        if (swinging) return;
+        StartCoroutine(SwingRoutine(type));
+    }
+
+    IEnumerator SwingRoutine(SwingType type)
+    {
+        swinging = true;
+
+        float windup, attack, ret;
+
+        switch (type)
+        {
+            case SwingType.Lunge:
+                windup = lungeWindup; attack = lungeAttack; ret = lungeReturn;
+                break;
+            case SwingType.Low:
+                windup = lowWindup; attack = lowAttack; ret = lowReturn;
+                break;
+            default:
+                windup = slashWindup; attack = slashAttack; ret = slashReturn;
+                break;
+        }
+
+        yield return RotateTo(windup, windupTime);
+        yield return RotateTo(attack, attackTime);
+        yield return RotateTo(ret,    returnTime);
+
+        swinging = false;
+    }
+
+    IEnumerator RotateTo(float target, float time)
+    {
+        float start = NormalizeAngle(transform.localEulerAngles.z);
+        float t = 0f;
+        while (t < 1f)
+        {
+            t += Time.deltaTime / Mathf.Max(0.0001f, time);
+            transform.localRotation = Quaternion.Euler(0f, 0f, Mathf.Lerp(start, target, t));
+            yield return null;
+        }
+    }
+
+    float NormalizeAngle(float z) => z > 180f ? z - 360f : z;
+}
